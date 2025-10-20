@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8" />
+  <title>Seterra Multi-Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{--dot-scale:1;--map-scale:1}
+
+    body{margin:0;background:#0f172a;color:#e5e7eb;font:16px/1.4 system-ui,Segoe UI,Roboto,Helvetica,Arial}
+    #topbar{display:flex;gap:8px;padding:8px;background:#111827;position:fixed;top:0;left:0;right:0;z-index:2000}
+    #topbar button{padding:4px 10px;border:none;border-radius:6px;cursor:pointer;background:#1f2937;color:#e5e7eb;font-size:14px}
+    #topbar button.active{background:#2563eb;color:#fff}
+
+    #app{display:flex;gap:16px;max-width:1200px;margin:48px auto 0;padding:12px 8px;padding-right:360px}
+    #map-col{flex:1;position:relative;display:flex;justify-content:center}
+    #map{display:block;width:calc(55% * var(--map-scale));height:auto;margin:0 auto}
+    #overlay{position:absolute;top:0;left:calc((100% - (55% * var(--map-scale)))/2);width:calc(55% * var(--map-scale));height:100%;pointer-events:none}
+
+    .dot{
+      position:absolute;
+      width:calc(22px*var(--dot-scale));
+      height:calc(22px*var(--dot-scale));
+      border-radius:50%;
+      transform:translate(-50%,-50%);
+      cursor:pointer;z-index:2;
+      background:#60a5fa;color:#000;font-weight:800;font-size:calc(13px*var(--dot-scale));
+      display:flex;align-items:center;justify-content:center;
+      border:2px solid #0a0a0a;box-shadow:0 0 0 2px rgba(255,255,255,.7);pointer-events:auto
+    }
+    .marked-1{background:#fff!important}
+    .marked-2{background:#fde047!important}
+    .marked-3{background:#fb923c!important}
+    .marked-4{background:#ef4444!important}
+
+    #side{width:320px;max-height:80vh;overflow:auto;position:fixed;right:16px;top:50%;transform:translateY(-50%);z-index:1000;background:#0b1220;padding:16px;display:flex;flex-direction:column;gap:12px;border-left:1px solid #1f2937;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    #targetBox{font-size:18px;font-weight:700}
+    #typingBox{display:none;flex-direction:column;gap:6px}
+    input[type=text]{padding:6px 8px;border-radius:6px;border:1px solid #333;background:#1f2937;color:#fff}
+    .bubble{position:absolute;background:#111827;color:#fff;padding:2px 6px;border-radius:6px;font-size:13px;pointer-events:none;z-index:5;white-space:nowrap}
+    .highlight{box-shadow:0 0 0 4px rgba(168,85,247,.8), 0 0 0 2px rgba(255,255,255,.9) inset}
+    textarea{width:100%;min-height:120px;background:#0f172a;color:#e5e7eb;border:1px solid #334155;border-radius:8px;padding:8px;display:none}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .muted{font-size:13px;opacity:.85}
+
+    #sizeCtl{position:fixed;right:16px;bottom:12px;background:#0b1220;border:1px solid #1f2937;border-radius:10px;padding:8px 10px;display:flex;align-items:center;gap:10px;z-index:1200;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+    #sizeCtl label{font-size:12px;opacity:.9}
+    #sizeCtl input[type=range]{width:140px}
+
+    #resetCtl{position:fixed;left:16px;bottom:12px;background:#0b1220;border:1px solid #1f2937;border-radius:10px;padding:8px 10px;display:flex;align-items:center;gap:10px;z-index:1200;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+    #resetCtl button{padding:6px 10px;border-radius:8px;border:1px solid #334155;background:#1f2937;color:#e5e7eb;cursor:pointer}
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <button data-map="EU" class="active">Europa</button>
+    <button data-map="NA">Nordamerika</button>
+    <button data-map="SA">Sydamerika</button>
+    <button data-map="AF">Afrika</button>
+    <button data-map="AS">Asien</button>
+  </div>
+
+  <main id="app">
+    <div id="map-col">
+      <img id="map" src="" alt="karta">
+      <div id="overlay"></div>
+    </div>
+    <div id="side">
+      <div id="targetBox">–</div>
+      <div class="row">
+        <label><input type="checkbox" id="typingToggle"> Skrivläge</label>
+        <label><input type="checkbox" id="testToggle"> Testläge</label>
+      </div>
+      <div id="typingBox">
+        <input type="text" id="answerInput" placeholder="Skriv svaret här...">
+        <button id="submitAnswer">Svar</button>
+        <div id="hint" class="muted" style="display:none"></div>
+      </div>
+      <div>Rätt: <span id="score">0</span>/<span id="total">0</span></div>
+      <div class="row">
+        <button id="skip">Hoppa över</button>
+        <button id="restart">Starta om</button>
+        <button id="exportPos" style="display:none">Exportera positioner</button>
+      </div>
+      <textarea id="exportBox" readonly></textarea>
+      <div class="muted">Tips: Efter 3 försök visas hint. Efter 5 visas hela svaret. I Testläge kan du dra punkter och exportera deras positioner.</div>
+    </div>
+  </main>
+
+  <div id="sizeCtl">
+    <div>
+      <label for="dotSize">Punktstorlek</label>
+      <input id="dotSize" type="range" min="0.6" max="1" step="0.01" value="1">
+      <span id="dotSizeVal">100%</span>
+    </div>
+    <div>
+      <label for="mapSize">Kartstorlek</label>
+      <input id="mapSize" type="range" min="0.7" max="1.5" step="0.01" value="1">
+      <span id="mapSizeVal">100%</span>
+    </div>
+  </div>
+
+  <div id="resetCtl"><button id="resetSliders">Återställ sliders</button></div>
+
+  <script>
+    // ====== MAP DATA ======
+    const maps = {
+      EU: {
+        img: "https://i.imgur.com/NawOoFD.png",
+        points: [
+          {name:'Skandinaviska halvön', x:45.4698, y:37.1742},
+          {name:'Kola halvön', x:61.0069, y:25.1005},
+          {name:'Pyreneiska halvön', x:18.6498, y:70.3768},
+          {name:'Balkan halvön', x:52.4985, y:67.835},
+          {name:'Jylland', x:39.7358, y:45.594},
+          {name:'Apenninska halvön', x:44.9149, y:68.6293},
+          {name:'Skanderna', x:48.6142, y:32.5671},
+          {name:'Karpaterna', x:57.6775, y:61.1627},
+          {name:'Alperna', x:43.2502, y:59.2563},
+          {name:'Pyreneerna', x:15.8753, y:63.8634},
+          {name:'Kaukasus', x:84.6825, y:66.7229},
+          {name:'Uralbergen', x:78.9486, y:32.2494},
+          {name:'Island', x:22.1641, y:24.3062},
+          {name:'Irland', x:20.3144, y:44.3231},
+          {name:'Storbritannien', x:27.7131, y:45.594},
+          {name:'Balearerna', x:27.1582, y:73.2364},
+          {name:'Korsika', x:32.8921, y:66.8818},
+          {name:'Sardinien', x:32.3372, y:71.9654},
+          {name:'Sicilien', x:40.6607, y:74.6661},
+          {name:'Kreta', x:58.7873, y:76.8902},
+          {name:'Atlanten', x:15.6903, y:52.584},
+          {name:'Nordsjön', x:34.0019, y:43.8465},
+          {name:'Norska havet', x:41.5855, y:28.1189},
+          {name:'Östersjön', x:49.3541, y:45.9117},
+          {name:'Medelhavet', x:48.7992, y:79.4321},
+          {name:'Svarta havet', x:67.2957, y:65.1343},
+          {name:'Gibraltar sund', x:16.4302, y:75.1427},
+          {name:'Kaspiska havet', x:88.3818, y:58.6209},
+          {name:'Ladoga', x:63.4115, y:39.2394},
+          {name:'Onega', x:66.1859, y:33.5203},
+          {name:'Vänern', x:45.2848, y:43.5288},
+          {name:'Themsen', x:29.5627, y:48.2947},
+          {name:'Elbe', x:44.7299, y:51.3131},
+          {name:'Rhen', x:38.2561, y:53.0606},
+          {name:'Seine', x:31.2274, y:53.2195},
+          {name:'Loire', x:27.3431, y:59.2563},
+          {name:'Tajo', x:12.5459, y:68.4704},
+          {name:'Tibern', x:38.996, y:64.9754},
+          {name:'Donau', x:52.1286, y:61.957},
+          {name:'Dnepr', x:64.5213, y:52.9018},
+          {name:'Volga', x:81.5381, y:50.0422},
+          {name:'Ural', x:88.0119, y:46.8649},
+          {name:'Elbrus', x:80.2433, y:58.6209},
+          {name:'Mount Blanc', x:34.7418, y:63.2279}
+        ]
+      },
+
+      NA: {
+        img: "https://i.imgur.com/gzRYGSC.jpeg",
+        points: [
+          {name:'Atlanten', x:81.46, y:63.6},
+          {name:'Mexikanska golfen', x:62.71, y:68.98},
+          {name:'Karibiska havet', x:76.79, y:79.85},
+          {name:'Californiaviken', x:42.88, y:69.6},
+          {name:'Stilla havet', x:26.29, y:52.6},
+          {name:'Berings sund', x:24.79, y:32.48},
+          {name:'Ishavet', x:43.21, y:29.73},
+          {name:'Hudson Bay', x:63.38, y:43.16, aliases:['Hudsonbukten']},
+          {name:'Panamakanalen', x:75.46, y:82.6},
+          {name:'Great Bear Lake', x:42.46, y:36.79, aliases:['Stora Björnsjön']},
+          {name:'Great Slave Lake', x:46.21, y:40.16, aliases:['Stora Slavsjön']},
+          {name:'Lake Winnipeg', x:53.13, y:47.1, aliases:['Winnipegsjön']},
+          {name:'Great Salt Lake', x:40.71, y:55.73, aliases:['Stora Saltsjön']},
+          {name:'Lake Superior', x:60.71, y:50.66, aliases:['Lake Superir']},
+          {name:'Lake Michigan', x:62.54, y:54.66, aliases:['Michigansjön']},
+          {name:'Lake Huron', x:68.54, y:51.6, aliases:['Huronsjön']},
+          {name:'Lake Erie', x:68.71, y:56.66, aliases:['Eriesjön']},
+          {name:'Ontariosjön', x:71.88, y:52.98, aliases:['Lake Ontario']},
+          {name:'Hudson floden', x:74.88, y:50.91},
+          {name:'Ohiofloden', x:66.29, y:59.41},
+          {name:'Mississippifloden', x:60.38, y:62.04},
+          {name:'Missourifloden', x:55.46, y:56.1},
+          {name:'Rio Grande', x:46.79, y:65.35},
+          {name:'Coloradofloden', x:40.96, y:59.16},
+          {name:'Columbiafloden', x:40.38, y:50.79},
+          {name:'Yukon', x:34.13, y:36.16, aliases:['yukonfloden']},
+          {name:'Klippiga bergen', x:36.29, y:45.6},
+          {name:'Appalacherna', x:73.63, y:60.23},
+          {name:'Denali', x:29.29, y:37.54, aliases:['McKinley','Mount McKinley']},
+          {name:'Grönland', x:74.54, y:31.16},
+          {name:'Stora Antillerna', x:90.54, y:67.85, aliases:['Karibien']},
+          {name:'Newfoundland', x:86.96, y:48.73},
+          {name:'Bermudaöarna', x:89.04, y:62.35, aliases:['bermuda']},
+          {name:'Bahamas', x:77.88, y:69.91},
+          {name:'Kuba', x:74.71, y:73.23},
+          {name:'Hispaniola', x:84.63, y:72.85},
+          {name:'Aleuterna', x:9.96, y:37.6},
+          {name:'Hawaii', x:12.04, y:61.85},
+          {name:'Brooks Range', x:31.13, y:33.23, aliases:['Alaska']},
+          {name:'Californiahalvön', x:36.46, y:69.23},
+          {name:'Labradorhalvön', x:75.79, y:45.35, aliases:['Labrador']},
+          {name:'Florida', x:74.96, y:65.54},
+          {name:'Yucatanhalvön', x:64.79, y:74.04, aliases:['Yucatan']}
+        ]
+      },
+
+      SA: {
+        img: "https://i.imgur.com/IgWbp9k.jpeg",
+        points: [
+          {name:'Karibiska havet', x:31.5152, y:4.92502},
+          {name:'Maracaibo sjön', x:31.6667, y:9.24942},
+          {name:'Atlanten', x:81.5152, y:58.86},
+          {name:'Rio de la Plata', x:61.9697, y:68.2295},
+          {name:'Magellans sund', x:49.2424, y:89.9717},
+          {name:'Stilla havet', x:27.2727, y:51.4124},
+          {name:'Amazonfloden', x:59.697, y:21.622},
+          {name:'Purus', x:41.3636, y:30.7513},
+          {name:'Parana', x:60.7576, y:53.5746},
+          {name:'Titicaca sjön', x:37.5758, y:40.9617},
+          {name:'Falklandsöarna', x:56.9697, y:86.9686},
+          {name:'Eldslandet', x:52.7273, y:92.4942},
+          {name:'Galapagosöarna', x:6.66667, y:24.7452},
+          {name:'Kap Horn', x:48.0303, y:96.3381},
+          {name:'Anderna', x:44.697, y:49.4904},
+          {name:'Guyanas högland', x:55.303, y:15.4958},
+          {name:'Brasilienska höglandet', x:73.1818, y:47.8087},
+          {name:'Amazonas bäckenet', x:56.3636, y:28.469},
+          {name:'Pampas', x:49.8485, y:67.2685},
+          {name:'Patagonien', x:45.303, y:83.2448},
+          {name:'Aconcagua', x:45.1515, y:62.9441}
+        ]
+      },
+
+      AF: {
+        img: "https://i.imgur.com/6v6AfZ1.png",
+        points: [
+          {name:'Atlanten', x:25.8634, y:63.8884},
+          {name:'Gibraltar sund', x:23.6438, y:13.6461},
+          {name:'Medelhavet', x:55.6429, y:15.3518},
+          {name:'Röda havet', x:82.093, y:35.3557},
+          {name:'Indiska oceanen', x:93.3759, y:57.2204},
+          {name:'Guineabukten', x:34.5568, y:53.6538},
+          {name:'Suez kanalen', x:75.0643, y:19.6937},
+          {name:'Nilen', x:67.8506, y:28.6877},
+          {name:'Niger', x:35.4816, y:39.2324},
+          {name:'Kongo', x:56.3828, y:50.0872},
+          {name:'Zambezi', x:65.0762, y:71.1766},
+          {name:'Oranje', x:55.088, y:83.5821},
+          {name:'Tchadsjön', x:45.2848, y:41.4034},
+          {name:'Victoriasjön', x:68.9604, y:54.5842},
+          {name:'Tanganyikasjön', x:70.8101, y:60.942},
+          {name:'Malawisjön', x:71.18, y:67.1448},
+          {name:'Kanarieöarna', x:11.4361, y:25.5864},
+          {name:'Kap Verde', x:2.5577, y:33.1847},
+          {name:'Zanzibar', x:84.4976, y:62.4927},
+          {name:'Comorerna', x:88.7518, y:66.0593},
+          {name:'Madagaskar', x:88.7518, y:76.2939},
+          {name:'Afrikas horn', x:91.8962, y:47.6061},
+          {name:'Godahoppsudden', x:50.2789, y:93.3514},
+          {name:'Atlasbergen', x:33.0771, y:17.3677},
+          {name:'Ahaggar', x:36.5914, y:25.4313},
+          {name:'Tibesti', x:53.0534, y:30.8587},
+          {name:'Etiopiska höglandet', x:82.278, y:45.125},
+          {name:'Drakbergen', x:62.8566, y:83.8922},
+          {name:'Kilimanjaro', x:76.1741, y:60.0116},
+          {name:'Sahara', x:24.5687, y:27.6022},
+          {name:'Namiböknen', x:50.6488, y:76.2939},
+          {name:'Kalahariöknen', x:58.4174, y:78.775}
+        ]
+      },
+
+      AS: {
+        img: "https://i.imgur.com/XDMD3VJ.png",
+        points: [
+          {name:"Ishavet", x:48.0318, y:8.4945},
+          {name:"Berings sund", x:67.0422, y:4.4596},
+          {name:"Berings hav", x:71.6664, y:10.1934},
+          {name:"Ochotska havet", x:67.3847, y:25.9084},
+          {name:"Japanska havet", x:68.7549, y:45.4458},
+          {name:"Gula havet", x:64.8158, y:53.3032},
+          {name:"Stilla Havet", x:73.2077, y:61.1607},
+          {name:"Sydkinesiska havet", x:63.2744, y:77.088},
+          {name:"Bengaliska viket", x:41.8663, y:77.5127},
+          {name:"Indiska oceanen", x:34.6731, y:91.5287},
+          {name:"Arabiska havet", x:25.4248, y:76.0261},
+          {name:"Persiska viken", x:15.4915, y:61.1607},
+          {name:"Röda havet", x:3.3316, y:63.2843},
+          {name:"Medelhavet", x:4.0167, y:40.9862},
+          {name:"Svarta havet", x:10.696, y:35.04},
+          {name:"Suezkanalen", x:6.7569, y:48.4189},
+          {name:"Kaspiska havet", x:18.7455, y:47.9942},
+          {name:"Aralsjön", x:26.4524, y:46.0829},
+          {name:"Bajkasjön", x:52.8272, y:38.6502},
+          {name:"Balkasjsjön", x:33.8168, y:43.9593},
+          {name:"Eufrat", x:10.1822, y:50.1178},
+          {name:"Tigris", x:14.2926, y:52.0291},
+          {name:"Indus", x:26.7949, y:60.9483},
+          {name:"Ganges", x:32.4467, y:65.408},
+          {name:"Brahmaputta", x:45.4628, y:67.744},
+          {name:"Mekong", x:54.1973, y:77.9374},
+          {name:"Chang Jiang", x:58.1364, y:62.2225},
+          {name:"Huang He", x:57.1088, y:53.3032},
+          {name:"Amur", x:62.418, y:36.1018},
+          {name:"Ob", x:35.1869, y:33.7658},
+          {name:"Jenisej", x:43.7502, y:32.704},
+          {name:"Lena", x:53.6835, y:22.7229},
+          {name:"Kamtjartka", x:69.4399, y:20.5993},
+          {name:"Kurilerna", x:74.9204, y:30.368},
+          {name:"Sakhalin", x:68.4123, y:30.1556},
+          {name:"Hokkaido", x:73.8928, y:38.4378},
+          {name:"Honshu", x:74.7491, y:47.9942},
+          {name:"East China", x:67.7273, y:64.1338},
+          {name:"Hainan", x:59.8491, y:72.6283},
+          {name:"Philippines", x:68.9261, y:76.8756},
+          {name:"Nya guinea", x:88.4503, y:84.7331},
+          {name:"Salawesi", x:73.0365, y:89.1927},
+          {name:"Bali", x:66.6997, y:94.2894},
+          {name:"Borneo", x:64.4732, y:89.6174},
+          {name:"Java", x:60.8767, y:95.5636},
+          {name:"Sumatra", x:54.8824, y:94.2894},
+          {name:"Malackahalvön", x:53.1697, y:87.4938},
+          {name:"Sri lanka", x:36.3858, y:84.096},
+          {name:"Maldiverna", x:25.2536, y:88.3432},
+          {name:"Arabien", x:8.4696, y:58.1876},
+          {name:"Turkiye", x:7.9558, y:39.2873},
+          {name:"South Turkiye", x:6.4144, y:44.5963},
+          {name:"Kaukasus", x:16.3478, y:42.6851},
+          {name:"Uralbergen", x:27.48, y:30.368},
+          {name:"Changajbergen", x:46.4904, y:45.8705},
+          {name:"Tian Shan", x:34.5019, y:49.9054},
+          {name:"Kunlun Shan", x:42.7226, y:55.8516},
+          {name:"Himalaya", x:38.0984, y:61.5854},
+          {name:"Mount Everest", x:38.9547, y:68.3811},
+          {name:"Tibet", x:42.2088, y:61.3731},
+          {name:"Sibirien", x:48.2031, y:28.6691},
+          {name:"Sahara", x:10.696, y:66.6822},
+          {name:"Gobi", x:51.6284, y:47.1447}
+        ]
+      }
+    };
+
+    // ====== STATE ======
+    let currentMap = "EU";
+    let dots=[], order=[], idx=0, attempts=0, score=0;
+    let dragging = null;
+
+    const overlay=document.getElementById('overlay');
+    const mapImg=document.getElementById('map');
+    const targetBox=document.getElementById('targetBox');
+    const exportBtn=document.getElementById('exportPos');
+    const exportBox=document.getElementById('exportBox');
+
+    // ====== LOAD / RENDER ======
+    function loadMap(key){
+      currentMap = key;
+      document.querySelectorAll("#topbar button").forEach(b=>b.classList.remove("active"));
+      document.querySelector(`#topbar button[data-map=${key}]`).classList.add("active");
+      const m = maps[key];
+      mapImg.src=m.img;
+      overlay.innerHTML="";
+      dots=m.points.map((p,i)=>({...p,el:makeDot(p,i),done:false}));
+      order=[...dots.keys()].sort(()=>Math.random()-.5);
+      idx=0;attempts=0;score=0;
+      document.getElementById('score').textContent=0;
+      document.getElementById('total').textContent=dots.length;
+      const h=document.getElementById('hint'); h.textContent=""; h.style.display='none';
+      setPrompt();
+    }
+
+    function makeDot({name,x,y},i){
+      const d=document.createElement('div');
+      d.className='dot';
+      d.style.left=x+'%';
+      d.style.top=y+'%';
+      d.textContent=i+1;
+      d.dataset.name=name;
+      overlay.appendChild(d);
+      d.addEventListener('mousedown',onDotMouseDown);
+      d.addEventListener('click',handleClick);
+      return d;
+    }
+
+    // ====== GAME LOGIC ======
+    const norm = s => (s||'').toLowerCase().replace(/\s+/g,'');
+    function isCorrectAnswer(input,point){
+      const guess = norm(input);
+      if(norm(point.name)===guess) return true;
+      if(point.aliases) return point.aliases.some(a=>norm(a)===guess);
+      return false;
+    }
+
+    function setPrompt(){
+      if(idx>=order.length){ targetBox.textContent='Klart!'; return; }
+      const typingOn=document.getElementById('typingToggle').checked;
+      dots.forEach(d=>d.el.classList.remove('highlight'));
+      if(typingOn){ targetBox.textContent='Skriv namnet'; dots[order[idx]].el.classList.add('highlight'); }
+      else { targetBox.textContent=dots[order[idx]].name; }
+    }
+
+    function nextRound(){ attempts=0; idx++; if(idx>=order.length){ targetBox.textContent='Klart!'; return; } setPrompt(); }
+
+    function showBubble(dot){
+      const b=document.createElement('div'); b.className='bubble'; b.textContent=dot.dataset.name; overlay.appendChild(b);
+      const rect=dot.getBoundingClientRect(); const wrect=overlay.getBoundingClientRect();
+      b.style.left=(rect.left-wrect.left)+'px'; b.style.top=(rect.top-wrect.top-26)+'px'; setTimeout(()=>b.remove(),3000);
+    }
+
+    function handleClick(e){
+      if(idx>=order.length) return;
+      if(document.getElementById('testToggle').checked) return; // ignore clicks in Testläge
+      if(document.getElementById('typingToggle').checked) return; // ignore clicks in Skrivläge
+      const target=dots[order[idx]]; const clicked=dots.find(d=>d.el===e.currentTarget);
+      if(clicked!==target){ attempts++; if(attempts>=3){ target.el.classList.add('marked-4'); } showBubble(clicked.el); return; }
+      const cls=attempts===0?'marked-1':attempts===1?'marked-2':'marked-3';
+      target.el.classList.add(cls); target.done=true; score++; document.getElementById('score').textContent=score; showBubble(clicked.el); nextRound();
+    }
+
+    function submitAnswer(){
+      if(idx>=order.length)return; if(!document.getElementById('typingToggle').checked) return;
+      const target=dots[order[idx]]; const val=document.getElementById('answerInput').value||'';
+      if(isCorrectAnswer(val,target)){
+        const cls=attempts===0?'marked-1':attempts===1?'marked-2':'marked-3'; target.el.classList.add(cls); target.done=true; score++; document.getElementById('score').textContent=score; const hintEl=document.getElementById('hint'); hintEl.style.display='none'; document.getElementById('answerInput').value=''; nextRound();
+      } else {
+        attempts++;
+        const hintEl=document.getElementById('hint');
+        if(attempts>=5){ hintEl.textContent='Svar: '+target.name; hintEl.style.display='block'; }
+        else if(attempts>=3){ hintEl.textContent='Hint: '+target.name; hintEl.style.display='block'; }
+      }
+    }
+
+    // ====== TEST MODE (drag & export) ======
+    function onDotMouseDown(e){
+      if(!document.getElementById('testToggle').checked) return;
+      e.preventDefault();
+      const el=e.currentTarget; const dot=dots.find(d=>d.el===el); if(!dot) return;
+      dragging={dot};
+      document.addEventListener('mousemove',onMouseMove);
+      document.addEventListener('mouseup',onMouseUp);
+    }
+
+    function onMouseMove(e){
+      if(!dragging) return;
+      const r=overlay.getBoundingClientRect();
+      let x=((e.clientX - r.left)/r.width)*100; let y=((e.clientY - r.top)/r.height)*100;
+      x=Math.max(0,Math.min(100,x)); y=Math.max(0,Math.min(100,y));
+      dragging.dot.x=+x.toFixed(4); dragging.dot.y=+y.toFixed(4);
+      dragging.dot.el.style.left=dragging.dot.x+'%'; dragging.dot.el.style.top=dragging.dot.y+'%';
+    }
+    function onMouseUp(){ if(!dragging) return; dragging=null; document.removeEventListener('mousemove',onMouseMove); document.removeEventListener('mouseup',onMouseUp); }
+
+    document.getElementById('testToggle').addEventListener('change',()=>{
+      const on=document.getElementById('testToggle').checked;
+      exportBtn.style.display= on ? 'inline-block' : 'none';
+      exportBox.style.display= on ? 'block' : 'none';
+      if(on){ document.getElementById('typingToggle').checked=false; document.getElementById('typingBox').style.display='none'; targetBox.textContent='Testläge: dra punkter och exportera'; }
+      setPrompt();
+    });
+
+    exportBtn.addEventListener('click',()=>{
+      const out=dots.map((d,i)=>({index:i+1, name:d.name, x:d.x, y:d.y}));
+      exportBox.value = JSON.stringify(out, null, 2);
+      exportBox.select(); document.execCommand('copy');
+    });
+
+    // ====== CONTROLS ======
+    document.getElementById('typingToggle').addEventListener('change',()=>{
+      const typingBox=document.getElementById('typingBox');
+      const on=document.getElementById('typingToggle').checked;
+      typingBox.style.display= on ? 'flex' : 'none';
+      if(on){ document.getElementById('testToggle').checked=false; exportBtn.style.display='none'; exportBox.style.display='none'; }
+      setPrompt();
+      if(on && idx<order.length){ dots[order[idx]].el.classList.add('highlight'); document.getElementById('answerInput').focus(); }
+    });
+
+    document.getElementById('submitAnswer').addEventListener('click',submitAnswer);
+    document.getElementById('answerInput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); submitAnswer(); } });
+
+    document.getElementById('skip').addEventListener('click',()=>{
+      if(idx>=order.length) return; const cur=order[idx]; order=order.slice(0,idx).concat(order.slice(idx+1),[cur]); attempts=0; dots[cur].el.classList.remove('marked-4','highlight'); setPrompt();
+    });
+
+    document.getElementById('restart').addEventListener('click',()=>{
+      idx=0; attempts=0; score=0; document.getElementById('score').textContent=0;
+      order=[...dots.keys()].sort(()=>Math.random()-.5);
+      dots.forEach(d=>d.el.classList.remove('marked-1','marked-2','marked-3','marked-4','highlight'));
+      setPrompt();
+    });
+
+    document.querySelectorAll('#topbar button').forEach(b=> b.addEventListener('click',()=> loadMap(b.dataset.map)) );
+
+    // ====== Sliders (dot size & map size) ======
+    const sizeInput=document.getElementById('dotSize');
+    const sizeVal=document.getElementById('dotSizeVal');
+    const mapInput=document.getElementById('mapSize');
+    const mapVal=document.getElementById('mapSizeVal');
+
+    function applyDotScale(v){
+      document.documentElement.style.setProperty('--dot-scale', v);
+      sizeVal.textContent=Math.round(v*100)+"%";
+      localStorage.setItem('dotScale', v);
+    }
+    function applyMapScale(v){
+      document.documentElement.style.setProperty('--map-scale', v);
+      mapVal.textContent=Math.round(v*100)+"%";
+      localStorage.setItem('mapScale', v);
+    }
+    const savedDot=parseFloat(localStorage.getItem('dotScale')||'1');
+    const savedMap=parseFloat(localStorage.getItem('mapScale')||'1');
+    sizeInput.value=isNaN(savedDot)?'1':String(savedDot);
+    mapInput.value=isNaN(savedMap)?'1':String(savedMap);
+    applyDotScale(parseFloat(sizeInput.value));
+    applyMapScale(parseFloat(mapInput.value));
+    sizeInput.addEventListener('input', e=>applyDotScale(parseFloat(e.target.value)));
+    mapInput.addEventListener('input', e=>applyMapScale(parseFloat(e.target.value)));
+    document.getElementById('resetSliders').addEventListener('click',()=>{
+      applyDotScale(1); applyMapScale(1);
+      sizeInput.value='1'; mapInput.value='1';
+    });
+
+    // init
+    loadMap('EU');
+  </script>
+</body>
+</html>
