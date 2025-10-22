@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
   <meta charset="UTF-8" />
-  <title>Seterra Multi-Map</title>
+  <title>Seterra Multi Map (live Preview)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root{--dot-scale:1;--map-scale:1}
@@ -83,7 +83,7 @@
         <button id="exportPos" style="display:none">Exportera positioner</button>
       </div>
       <textarea id="exportBox" readonly></textarea>
-      <div class="muted">Tips: Efter 3 försök visas hint. Efter 5 visas hela svaret. I Testläge kan du dra punkter och exportera deras positioner.</div>
+      <div class="muted">Tips: Efter 3 försök visas hint (maskerad). Efter 5 visas hela svaret. Klicka sedan Svar för att markera rött och gå vidare. I Testläge kan du dra punkter och exportera deras positioner.</div>
     </div>
   </main>
 
@@ -340,9 +340,9 @@
     };
 
     // ====== STATE ======
-    let currentMap = "EU";
+    let currentMap = 'EU';
     let dots=[], order=[], idx=0, attempts=0, score=0;
-    let dragging = null;
+    let dragging=null; let awaitingConfirm=false; // for skrivläge after full answer
 
     const overlay=document.getElementById('overlay');
     const mapImg=document.getElementById('map');
@@ -350,20 +350,24 @@
     const exportBtn=document.getElementById('exportPos');
     const exportBox=document.getElementById('exportBox');
 
+    // ====== HELPERS ======
+    const norm = s => (s||'').toLowerCase().replace(/\s+/g,'');
+    const maskedHint = name => name.split(/\s+/).map(w=> w? (w[0] + '...') : '').join(' ');
+
     // ====== LOAD / RENDER ======
     function loadMap(key){
       currentMap = key;
-      document.querySelectorAll("#topbar button").forEach(b=>b.classList.remove("active"));
-      document.querySelector(`#topbar button[data-map=${key}]`).classList.add("active");
+      document.querySelectorAll('#topbar button').forEach(b=>b.classList.remove('active'));
+      document.querySelector(`#topbar button[data-map=${key}]`).classList.add('active');
       const m = maps[key];
       mapImg.src=m.img;
-      overlay.innerHTML="";
+      overlay.innerHTML='';
       dots=m.points.map((p,i)=>({...p,el:makeDot(p,i),done:false}));
       order=[...dots.keys()].sort(()=>Math.random()-.5);
-      idx=0;attempts=0;score=0;
+      idx=0;attempts=0;score=0;awaitingConfirm=false;
       document.getElementById('score').textContent=0;
       document.getElementById('total').textContent=dots.length;
-      const h=document.getElementById('hint'); h.textContent=""; h.style.display='none';
+      const h=document.getElementById('hint'); h.textContent=''; h.style.display='none';
       setPrompt();
     }
 
@@ -381,7 +385,6 @@
     }
 
     // ====== GAME LOGIC ======
-    const norm = s => (s||'').toLowerCase().replace(/\s+/g,'');
     function isCorrectAnswer(input,point){
       const guess = norm(input);
       if(norm(point.name)===guess) return true;
@@ -397,7 +400,7 @@
       else { targetBox.textContent=dots[order[idx]].name; }
     }
 
-    function nextRound(){ attempts=0; idx++; if(idx>=order.length){ targetBox.textContent='Klart!'; return; } setPrompt(); }
+    function nextRound(){ attempts=0; awaitingConfirm=false; idx++; if(idx>=order.length){ targetBox.textContent='Klart!'; return; } setPrompt(); }
 
     function showBubble(dot){
       const b=document.createElement('div'); b.className='bubble'; b.textContent=dot.dataset.name; overlay.appendChild(b);
@@ -407,24 +410,61 @@
 
     function handleClick(e){
       if(idx>=order.length) return;
-      if(document.getElementById('testToggle').checked) return; // ignore clicks in Testläge
+      const clicked=dots.find(d=>d.el===e.currentTarget);
+      // Clicking white dots should ONLY show name and NEVER count as wrong
+      if(clicked.el.classList.contains('marked-1')) { showBubble(clicked.el); return; }
+      if(document.getElementById('testToggle').checked) return; // ignore in Testläge
       if(document.getElementById('typingToggle').checked) return; // ignore clicks in Skrivläge
-      const target=dots[order[idx]]; const clicked=dots.find(d=>d.el===e.currentTarget);
+      const target=dots[order[idx]];
       if(clicked!==target){ attempts++; if(attempts>=3){ target.el.classList.add('marked-4'); } showBubble(clicked.el); return; }
       const cls=attempts===0?'marked-1':attempts===1?'marked-2':'marked-3';
       target.el.classList.add(cls); target.done=true; score++; document.getElementById('score').textContent=score; showBubble(clicked.el); nextRound();
     }
 
     function submitAnswer(){
-      if(idx>=order.length)return; if(!document.getElementById('typingToggle').checked) return;
-      const target=dots[order[idx]]; const val=document.getElementById('answerInput').value||'';
-      if(isCorrectAnswer(val,target)){
-        const cls=attempts===0?'marked-1':attempts===1?'marked-2':'marked-3'; target.el.classList.add(cls); target.done=true; score++; document.getElementById('score').textContent=score; const hintEl=document.getElementById('hint'); hintEl.style.display='none'; document.getElementById('answerInput').value=''; nextRound();
+      if(idx>=order.length) return;
+      const typingOn = document.getElementById('typingToggle').checked;
+      if(!typingOn) return;
+
+      const inp = document.getElementById('answerInput');
+      const val = inp.value || '';
+      const target = dots[order[idx]];
+      const hintEl = document.getElementById('hint');
+
+      // If full answer has been shown, require user to type it to confirm
+      if(awaitingConfirm){
+        if(isCorrectAnswer(val, target)){
+          target.el.classList.add('marked-4');
+          hintEl.style.display='none';
+          inp.value='';
+          nextRound();
+        } else {
+          // Keep showing full answer; do not advance
+          // (no extra text shown)
+        }
+        return;
+      }
+
+      // Normal skrivläge flow
+      if(isCorrectAnswer(val, target)){
+        const cls = attempts===0 ? 'marked-1' : (attempts===1 ? 'marked-2' : 'marked-3');
+        target.el.classList.add(cls);
+        target.done = true;
+        score++; document.getElementById('score').textContent = score;
+        hintEl.style.display='none';
+        inp.value='';
+        nextRound();
       } else {
         attempts++;
-        const hintEl=document.getElementById('hint');
-        if(attempts>=5){ hintEl.textContent='Svar: '+target.name; hintEl.style.display='block'; }
-        else if(attempts>=3){ hintEl.textContent='Hint: '+target.name; hintEl.style.display='block'; }
+        if(attempts>=5){
+          // Show full answer but do NOT proceed; wait for user to type it and press Svar
+          hintEl.textContent = 'Svar: ' + target.name;
+          hintEl.style.display = 'block';
+          awaitingConfirm = true;
+        } else if(attempts>=3){
+          hintEl.textContent = 'Hint: ' + maskedHint(target.name);
+          hintEl.style.display = 'block';
+        }
       }
     }
 
@@ -476,13 +516,14 @@
     document.getElementById('answerInput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); submitAnswer(); } });
 
     document.getElementById('skip').addEventListener('click',()=>{
-      if(idx>=order.length) return; const cur=order[idx]; order=order.slice(0,idx).concat(order.slice(idx+1),[cur]); attempts=0; dots[cur].el.classList.remove('marked-4','highlight'); setPrompt();
+      if(idx>=order.length) return; const cur=order[idx]; order=order.slice(0,idx).concat(order.slice(idx+1),[cur]); attempts=0; awaitingConfirm=false; dots[cur].el.classList.remove('marked-4','highlight'); setPrompt();
     });
 
     document.getElementById('restart').addEventListener('click',()=>{
-      idx=0; attempts=0; score=0; document.getElementById('score').textContent=0;
+      idx=0; attempts=0; awaitingConfirm=false; score=0; document.getElementById('score').textContent=0;
       order=[...dots.keys()].sort(()=>Math.random()-.5);
       dots.forEach(d=>d.el.classList.remove('marked-1','marked-2','marked-3','marked-4','highlight'));
+      const h=document.getElementById('hint'); h.textContent=''; h.style.display='none';
       setPrompt();
     });
 
